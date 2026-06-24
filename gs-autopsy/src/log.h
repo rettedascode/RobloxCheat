@@ -36,7 +36,7 @@ namespace output
     {
         const auto ts = time();
         std::printf("\033[38;2;86;101;114m%s\033[0m  ", ts.c_str());
-        std::printf("\033[38;2;255;255;255mautopsy\033[38;2;0;174;255m.lol\033[0m  ");
+        std::printf("\033[38;2;255;214;102mHelios\033[0m  ");
         std::printf("%s%-7s\033[0m  ", color, tag);
     }
 

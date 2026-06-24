@@ -24,7 +24,177 @@ namespace aim {
     std::string PersistenceName = "";
     bool IsPersisting = false;
 
-    static bool knocked(sdk::player& player)
+    static float clampf(float Value, float Min, float Max)
+    {
+        return std::max(Min, std::min(Value, Max));
+    }
+
+    static bool knocked(const sdk::player& player);
+    static sdk::vector3 prediction(const sdk::instance& PartInst, const sdk::vector3& Position, float Distance);
+    static bool visible(const sdk::camera& Cam, const sdk::vector3& TargetPos, const sdk::vector2& ScreenPos);
+
+    namespace {
+        sdk::vector2 SmoothedScreen{};
+        sdk::vector3 SmoothedWorld{};
+        bool HasSmoothedAim = false;
+
+        int LockedHitboxIdx = 0;
+        uintptr_t LockedCharacter = 0;
+        int StickyMissFrames = 0;
+        int TriggerOnTargetFrames = 0;
+
+        constexpr int StickyMissGrace = 4;
+        constexpr int TriggerConfirmFrames = 3;
+        constexpr float TargetSwitchBias = 0.82f;
+
+        static float smoothstep(float value)
+        {
+            return clampf(value, 0.04f, 1.f);
+        }
+
+        static float mouseblend()
+        {
+            const float smooth = std::max(0.f, global::aim::mouse::Smoothing_X);
+            if (smooth <= 0.f)
+                return 0.65f;
+            return smoothstep(1.f / (1.f + smooth * 0.85f));
+        }
+
+        static float camerablend()
+        {
+            const float smooth = std::max(0.f, global::aim::camera::Smoothing_X);
+            if (smooth <= 0.f)
+                return 0.55f;
+            return smoothstep(1.f / (1.f + smooth * 0.9f));
+        }
+
+        static void resetaimstate()
+        {
+            HasSmoothedAim = false;
+            LockedHitboxIdx = 0;
+            LockedCharacter = 0;
+            StickyMissFrames = 0;
+            TriggerOnTargetFrames = 0;
+            TargetFound = false;
+            CurrentLockedName = "";
+            IsPersisting = false;
+            PersistenceName = "";
+            global::aim::AimTarget = sdk::instance(0);
+        }
+
+        static int resolvehitbox(int requested, int boneCount)
+        {
+            if (boneCount <= 0)
+                return 0;
+
+            if (requested >= boneCount)
+                requested = 0;
+
+            if (requested == 4)
+                return rand() % boneCount;
+
+            return requested;
+        }
+
+        static void collectbones(const sdk::player& player, std::vector<std::pair<sdk::vector3, sdk::instance>>& bones)
+        {
+            bones.clear();
+            if (player.Head.Address)
+                bones.push_back({ sdk::part(player.Head.Address).partposition(), player.Head });
+            if (player.Torso.Address)
+                bones.push_back({ sdk::part(player.Torso.Address).partposition(), player.Torso });
+            if (player.UpperTorso.Address)
+                bones.push_back({ sdk::part(player.UpperTorso.Address).partposition(), player.UpperTorso });
+            if (player.LowerTorso.Address)
+                bones.push_back({ sdk::part(player.LowerTorso.Address).partposition(), player.LowerTorso });
+            else if (player.HumanoidRootPart.Address)
+                bones.push_back({ sdk::part(player.HumanoidRootPart.Address).partposition(), player.HumanoidRootPart });
+        }
+
+        static bool validtarget(
+            const sdk::player& Plr,
+            const sdk::camera& Cam,
+            const sdk::vector3& CameraOrigin,
+            const POINT& CursorPos,
+            HWND RobloxWindow,
+            int hitboxIdx,
+            sdk::vector3& outBonePos,
+            sdk::vector2& outScreenPos,
+            float& outScore)
+        {
+            if (Plr.Local_Player ||
+                (global::LocalPlayer.character.Address != 0 && Plr.character.Address == global::LocalPlayer.character.Address) ||
+                !Plr.character.Address || !Plr.Head.Address)
+                return false;
+
+            if (global::aim::KnockedCheck && knocked(Plr))
+                return false;
+
+            std::vector<std::pair<sdk::vector3, sdk::instance>> Bones;
+            collectbones(Plr, Bones);
+            if (Bones.empty())
+                return false;
+
+            if (hitboxIdx >= (int)Bones.size())
+                hitboxIdx = 0;
+
+            sdk::vector3 BonePos = Bones[hitboxIdx].first;
+            if (std::isnan(BonePos.x))
+                return false;
+
+            const float Dist3D = (CameraOrigin - BonePos).magnitude();
+            if (Dist3D > 700.f)
+                return false;
+
+            BonePos = prediction(Bones[hitboxIdx].second, BonePos, Dist3D);
+
+            const sdk::vector2 ScreenPos = global::render.screen(BonePos);
+            if (ScreenPos.x <= -0.5f || ScreenPos.y <= -0.5f)
+                return false;
+
+            RECT ClientRect{};
+            GetClientRect(RobloxWindow, &ClientRect);
+            if (ScreenPos.x > ClientRect.right || ScreenPos.y > ClientRect.bottom)
+                return false;
+
+            if (global::aim::VisibleCheck && !visible(Cam, BonePos, ScreenPos))
+                return false;
+
+            const float Dist2D = sqrtf(
+                (ScreenPos.x - (float)CursorPos.x) * (ScreenPos.x - (float)CursorPos.x) +
+                (ScreenPos.y - (float)CursorPos.y) * (ScreenPos.y - (float)CursorPos.y));
+
+            if (global::aim::useFov && Dist2D > global::aim::FovSize)
+                return false;
+
+            outBonePos = BonePos;
+            outScreenPos = ScreenPos;
+            outScore = global::aim::TargetPriority == 1 ? Dist3D : Dist2D;
+            return true;
+        }
+
+        static void applytarget(
+            const sdk::vector3& bonePos,
+            const sdk::vector2& screenPos,
+            const std::string& name,
+            uintptr_t characterAddr,
+            int hitboxIdx)
+        {
+            if (LockedCharacter != characterAddr)
+                HasSmoothedAim = false;
+
+            LockedHitboxIdx = hitboxIdx;
+            LockedCharacter = characterAddr;
+            AimPositionW = bonePos;
+            AimPositionS = screenPos;
+            CurrentLockedName = name;
+            global::aim::AimTarget = sdk::instance(characterAddr);
+            TargetFound = true;
+            StickyMissFrames = 0;
+        }
+    }
+
+    static bool knocked(const sdk::player& player)
     {
         if (player.character.Address == 0)
             return false;
@@ -60,11 +230,6 @@ namespace aim {
         M.data[3] = Right.y;     M.data[4] = Up.y;    M.data[5] = -Forward.y;
         M.data[6] = Right.z;     M.data[7] = Up.z;    M.data[8] = -Forward.z;
         return M;
-    }
-
-    static float clampf(float Value, float Min, float Max)
-    {
-        return std::max(Min, std::min(Value, Max));
     }
 
     static bool hitchance()
@@ -202,168 +367,140 @@ namespace aim {
 
     void acquire() {
         TargetFound = false;
-        if (!global::render.Address) return;
+        if (!global::render.Address)
+            return;
 
         HWND RobloxWindow = FindWindowA(0, "Roblox");
         if (!RobloxWindow)
             return;
 
-        POINT CursorPos;
+        POINT CursorPos{};
         if (!GetCursorPos(&CursorPos) || !ScreenToClient(RobloxWindow, &CursorPos))
             return;
 
-        float ClosestDistance = 999999.f;
-        std::string BestName = "";
-        uintptr_t BestCharacterAddr = 0;
-
-        sdk::model Dm(global::model.Address);
-        sdk::instance WorkspaceInst = Dm.childclass("Workspace");
-        sdk::instance CameraInst = WorkspaceInst.child("Camera");
-        if (!CameraInst.Address) return;
+        sdk::instance CameraInst = global::camera.Address
+            ? sdk::instance(global::camera.Address)
+            : sdk::model(global::model.Address).childclass("Workspace").childclass("Camera");
+        if (!CameraInst.Address)
+            return;
 
         sdk::camera Cam(CameraInst.Address);
-        auto CameraOrigin = Cam.position();
-        auto PlayersSnapshot = cache::snapshot();
+        const sdk::vector3 CameraOrigin = Cam.position();
+        const auto PlayersSnapshot = cache::snapshot();
 
-        if (global::aim::AimbotSticky && IsPersisting && !PersistenceName.empty()) {
-            for (auto& Plr : PlayersSnapshot) {
-                if (Plr.name != PersistenceName) continue;
+        auto tryplayer = [&](const sdk::player& Plr, int hitboxIdx) -> bool {
+            sdk::vector3 bonePos{};
+            sdk::vector2 screenPos{};
+            float score = 0.f;
+            if (!validtarget(Plr, Cam, CameraOrigin, CursorPos, RobloxWindow, hitboxIdx, bonePos, screenPos, score))
+                return false;
 
-                if (Plr.Local_Player ||
-                    (global::LocalPlayer.character.Address != 0 && Plr.character.Address == global::LocalPlayer.character.Address) ||
-                    !Plr.character.Address || !Plr.Head.Address)
+            if (LockedCharacter != 0 && Plr.character.Address != LockedCharacter)
+            {
+                float currentScore = 999999.f;
+                for (auto& current : PlayersSnapshot)
                 {
-                    IsPersisting = false;
-                    PersistenceName = "";
-                    global::aim::AimTarget = sdk::instance(0);
-                    return;
+                    if (current.character.Address != LockedCharacter)
+                        continue;
+
+                    sdk::vector3 currentBone{};
+                    sdk::vector2 currentScreen{};
+                    if (!validtarget(current, Cam, CameraOrigin, CursorPos, RobloxWindow, LockedHitboxIdx, currentBone, currentScreen, currentScore))
+                        return false;
+                    break;
                 }
 
-                std::vector<std::pair<sdk::vector3, sdk::instance>> Bones;
-                if (Plr.Head.Address) Bones.push_back({ sdk::part(Plr.Head.Address).partposition(), Plr.Head });
-                if (Plr.Torso.Address) Bones.push_back({ sdk::part(Plr.Torso.Address).partposition(), Plr.Torso });
-                if (Plr.LowerTorso.Address) Bones.push_back({ sdk::part(Plr.LowerTorso.Address).partposition(), Plr.LowerTorso });
+                if (score > currentScore * TargetSwitchBias)
+                    return false;
+            }
 
-                if (Bones.empty()) {
-                    IsPersisting = false;
-                    PersistenceName = "";
-                    global::aim::AimTarget = sdk::instance(0);
+            applytarget(bonePos, screenPos, Plr.name, Plr.character.Address, hitboxIdx);
+            if (global::aim::AimbotSticky && !IsPersisting)
+            {
+                PersistenceName = Plr.name;
+                IsPersisting = true;
+            }
+            return true;
+        };
+
+        if (global::aim::AimbotSticky && IsPersisting && !PersistenceName.empty())
+        {
+            for (auto& Plr : PlayersSnapshot)
+            {
+                if (Plr.name != PersistenceName)
+                    continue;
+
+                if (tryplayer(Plr, LockedHitboxIdx))
                     return;
-                }
 
-                int HitboxIdx = global::aim::HitPart;
-                if (HitboxIdx >= (int)Bones.size()) HitboxIdx = 0;
-                if (HitboxIdx == 4) HitboxIdx = rand() % (int)Bones.size();
-
-                sdk::vector3 BonePos = Bones[HitboxIdx].first;
-                if (std::isnan(BonePos.x)) {
-                    IsPersisting = false;
-                    PersistenceName = "";
-                    global::aim::AimTarget = sdk::instance(0);
-                    return;
-                }
-
-                const float Dist3D = (CameraOrigin - BonePos).magnitude();
-                BonePos = prediction(Bones[HitboxIdx].second, BonePos, Dist3D);
-
-                sdk::render Ve(global::render.Address);
-                auto ScreenPos = Ve.screen(BonePos);
-
-
-                if (ScreenPos.x <= -0.5f || ScreenPos.y <= -0.5f ||
-                    (global::aim::VisibleCheck && !visible(Cam, BonePos, ScreenPos))) {
-                    IsPersisting = false;
-                    PersistenceName = "";
-                    global::aim::AimTarget = sdk::instance(0);
-                    return;
-                }
-
-                float Dist2D = sqrtf(
-                    (ScreenPos.x - CursorPos.x) * (ScreenPos.x - CursorPos.x) +
-                    (ScreenPos.y - CursorPos.y) * (ScreenPos.y - CursorPos.y));
-
-                if (global::aim::useFov && Dist2D > global::aim::FovSize) {
-                    IsPersisting = false;
-                    PersistenceName = "";
-                    global::aim::AimTarget = sdk::instance(0);
-                    return;
-                }
-
-                AimPositionW = BonePos;
-                AimPositionS = { ScreenPos.x, ScreenPos.y };
-                CurrentLockedName = Plr.name;
-                global::aim::AimTarget = sdk::instance(Plr.character.Address);
-                TargetFound = true;
+                if (++StickyMissFrames >= StickyMissGrace)
+                    resetaimstate();
                 return;
             }
 
-            IsPersisting = false;
-            PersistenceName = "";
-            global::aim::AimTarget = sdk::instance(0);
+            if (++StickyMissFrames >= StickyMissGrace)
+                resetaimstate();
+            return;
         }
 
-        for (auto& Plr : PlayersSnapshot) {
-            if (Plr.Local_Player ||
-                (global::LocalPlayer.character.Address != 0 && Plr.character.Address == global::LocalPlayer.character.Address) ||
-                !Plr.character.Address || !Plr.Head.Address)
+        if (LockedCharacter != 0)
+        {
+            for (auto& Plr : PlayersSnapshot)
+            {
+                if (Plr.character.Address != LockedCharacter)
+                    continue;
+
+                if (tryplayer(Plr, LockedHitboxIdx))
+                    return;
+
+                if (++StickyMissFrames >= StickyMissGrace)
+                    LockedCharacter = 0;
+                return;
+            }
+
+            LockedCharacter = 0;
+        }
+
+        float closestDistance = 999999.f;
+        std::string bestName;
+        uintptr_t bestCharacterAddr = 0;
+        sdk::vector3 bestBonePos{};
+        sdk::vector2 bestScreenPos{};
+        int bestHitbox = 0;
+        bool foundCandidate = false;
+
+        for (auto& Plr : PlayersSnapshot)
+        {
+            sdk::vector3 bonePos{};
+            sdk::vector2 screenPos{};
+            float score = 0.f;
+
+            std::vector<std::pair<sdk::vector3, sdk::instance>> bones;
+            collectbones(Plr, bones);
+            const int resolvedHitbox = resolvehitbox(global::aim::HitPart, (int)bones.size());
+            if (!validtarget(Plr, Cam, CameraOrigin, CursorPos, RobloxWindow, resolvedHitbox, bonePos, screenPos, score))
                 continue;
 
-            if (global::aim::KnockedCheck && knocked(Plr))
-                continue;
-
-            std::vector<std::pair<sdk::vector3, sdk::instance>> Bones;
-            if (Plr.Head.Address) Bones.push_back({ sdk::part(Plr.Head.Address).partposition(), Plr.Head });
-            if (Plr.Torso.Address) Bones.push_back({ sdk::part(Plr.Torso.Address).partposition(), Plr.Torso });
-            if (Plr.LowerTorso.Address) Bones.push_back({ sdk::part(Plr.LowerTorso.Address).partposition(), Plr.LowerTorso });
-            else if (Plr.HumanoidRootPart.Address) Bones.push_back({ sdk::part(Plr.HumanoidRootPart.Address).partposition(), Plr.HumanoidRootPart });
-            if (Bones.empty()) continue;
-
-            int HitboxIdx = global::aim::HitPart;
-            if (HitboxIdx >= (int)Bones.size()) HitboxIdx = 0;
-            if (HitboxIdx == 4) HitboxIdx = rand() % (int)Bones.size();
-
-            sdk::vector3 BonePos = Bones[HitboxIdx].first;
-            if (std::isnan(BonePos.x)) continue;
-
-            float Dist3D = (CameraOrigin - BonePos).magnitude();
-            if (Dist3D > 700.f) continue;
-
-            BonePos = prediction(Bones[HitboxIdx].second, BonePos, Dist3D);
-
-            sdk::render Ve(global::render.Address);
-            auto ScreenPos = Ve.screen(BonePos);
-
-            if (ScreenPos.x <= -0.5f || ScreenPos.y <= -0.5f) continue;
-
-            RECT ClientRect;
-            GetClientRect(FindWindowA(0, "Roblox"), &ClientRect);
-            if (ScreenPos.x > ClientRect.right || ScreenPos.y > ClientRect.bottom) continue;
-            if (global::aim::VisibleCheck && !visible(Cam, BonePos, ScreenPos)) continue;
-
-            float Dist2D = sqrtf(
-                (ScreenPos.x - CursorPos.x) * (ScreenPos.x - CursorPos.x) +
-                (ScreenPos.y - CursorPos.y) * (ScreenPos.y - CursorPos.y));
-
-            if (global::aim::useFov && Dist2D > global::aim::FovSize) continue;
-
-            const float Score = global::aim::TargetPriority == 1 ? Dist3D : Dist2D;
-            if (Score < ClosestDistance) {
-                ClosestDistance = Score;
-                AimPositionW = BonePos;
-                AimPositionS = { ScreenPos.x, ScreenPos.y };
-                BestName = Plr.name;
-                BestCharacterAddr = Plr.character.Address;
-                TargetFound = true;
+            if (score < closestDistance)
+            {
+                closestDistance = score;
+                bestName = Plr.name;
+                bestCharacterAddr = Plr.character.Address;
+                bestBonePos = bonePos;
+                bestScreenPos = screenPos;
+                bestHitbox = resolvedHitbox;
+                foundCandidate = true;
             }
         }
 
-        if (TargetFound) {
-            CurrentLockedName = BestName;
-            global::aim::AimTarget = sdk::instance(BestCharacterAddr);
-            if (global::aim::AimbotSticky && !IsPersisting) {
-                PersistenceName = BestName;
-                IsPersisting = true;
-            }
+        if (!foundCandidate)
+            return;
+
+        applytarget(bestBonePos, bestScreenPos, bestName, bestCharacterAddr, bestHitbox);
+        if (global::aim::AimbotSticky && !IsPersisting)
+        {
+            PersistenceName = bestName;
+            IsPersisting = true;
         }
     }
 
@@ -373,19 +510,27 @@ namespace aim {
             return;
 
         static ULONGLONG LastShot = 0;
-        POINT CursorPos;
+        POINT CursorPos{};
         HWND Window = FindWindowA(0, "Roblox");
         if (!Window || GetForegroundWindow() != Window || !GetCursorPos(&CursorPos) || !ScreenToClient(Window, &CursorPos))
+        {
+            TriggerOnTargetFrames = 0;
             return;
+        }
 
         sdk::model Dm(global::model.Address);
         sdk::instance WorkspaceInst = Dm.childclass("Workspace");
         sdk::instance CameraInst = WorkspaceInst.child("Camera");
         if (!CameraInst.Address)
+        {
+            TriggerOnTargetFrames = 0;
             return;
+        }
 
         const sdk::vector2 Cursor{ (float)CursorPos.x, (float)CursorPos.y };
         const float Padding = std::max(0.f, global::aim::TriggerRadius);
+        sdk::camera Cam(CameraInst.Address);
+        bool onTarget = false;
 
         auto PlayersSnapshot = cache::snapshot();
         for (auto& Plr : PlayersSnapshot) {
@@ -407,90 +552,118 @@ namespace aim {
 
             sdk::vector3 Pos = sdk::part(Plr.Head.Address).partposition();
             sdk::vector2 ScreenPos = global::render.screen(Pos);
-            sdk::camera Cam(CameraInst.Address);
             if (global::aim::VisibleCheck && !visible(Cam, Pos, ScreenPos))
                 continue;
 
-            const ULONGLONG Now = GetTickCount64();
-            if (Now - LastShot < (ULONGLONG)std::max(0, global::aim::TriggerDelayMs))
-                return;
+            onTarget = true;
+            break;
+        }
 
-            INPUT Input[2]{};
-            Input[0].type = INPUT_MOUSE;
-            Input[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-            Input[1].type = INPUT_MOUSE;
-            Input[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
-            SendInput(2, Input, sizeof(INPUT));
-            LastShot = Now;
+        if (!onTarget)
+        {
+            TriggerOnTargetFrames = 0;
             return;
         }
+
+        if (++TriggerOnTargetFrames < TriggerConfirmFrames)
+            return;
+
+        const ULONGLONG Now = GetTickCount64();
+        if (Now - LastShot < (ULONGLONG)std::max(0, global::aim::TriggerDelayMs))
+            return;
+
+        INPUT Input[2]{};
+        Input[0].type = INPUT_MOUSE;
+        Input[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+        Input[1].type = INPUT_MOUSE;
+        Input[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+        SendInput(2, Input, sizeof(INPUT));
+        LastShot = Now;
+        TriggerOnTargetFrames = 0;
     }
 
     void update() {
-        if (!TargetFound) return;
-        if (!hitchance()) return;
+        if (!TargetFound)
+            return;
+        if (!hitchance())
+            return;
+
+        sdk::vector3 targetWorld = AimPositionW;
 
         if (global::aim::Aimbot_type == 1) {
             sdk::model Dm(global::model.Address);
             sdk::instance WorkspaceInst = Dm.childclass("Workspace");
             sdk::instance CameraInst = WorkspaceInst.child("Camera");
-            if (!CameraInst.Address) return;
+            if (!CameraInst.Address)
+                return;
 
             sdk::camera Cam(CameraInst.Address);
-            auto CamPos = Cam.position();
-            auto TargetPos = AimPositionW;
-
-            TargetPos.x += global::aim::ShakeX;
-            TargetPos.y += global::aim::ShakeY;
-            TargetPos.z += global::aim::ShakeY;
+            const sdk::vector3 CamPos = Cam.position();
 
             if (global::aim::Shake) {
-                TargetPos.x += ((float)rand() / RAND_MAX * 2 - 1) * global::aim::ShakeX;
-                TargetPos.y += ((float)rand() / RAND_MAX * 2 - 1) * global::aim::ShakeY;
-                TargetPos.z += ((float)rand() / RAND_MAX * 2 - 1) * global::aim::ShakeZ;
+                targetWorld.x += ((float)rand() / RAND_MAX * 2 - 1) * global::aim::ShakeX;
+                targetWorld.y += ((float)rand() / RAND_MAX * 2 - 1) * global::aim::ShakeY;
+                targetWorld.z += ((float)rand() / RAND_MAX * 2 - 1) * global::aim::ShakeZ;
             }
 
-            sdk::vector3 Delta = TargetPos - CamPos;
-            if (Delta.magnitude() < 0.01f) return;
+            if (!HasSmoothedAim) {
+                SmoothedWorld = targetWorld;
+                HasSmoothedAim = true;
+            }
 
-            float SmoothFactor = global::aim::camera::Smoothing_X / 100.f;
-            SmoothFactor = std::pow(SmoothFactor, 1.2f);
-            SmoothFactor = std::max(0.0f, std::min(SmoothFactor, 0.98f));
+            const float blendX = smoothstep(1.f / (1.f + std::max(0.f, global::aim::camera::Smoothing_X) * 0.9f));
+            const float blendY = smoothstep(1.f / (1.f + std::max(0.f, global::aim::camera::Smoothing_Y) * 0.9f));
+            const float blendZ = (blendX + blendY) * 0.5f;
 
-            sdk::matrix3 TargetMatrix = lookat(CamPos, TargetPos);
+            SmoothedWorld.x += (targetWorld.x - SmoothedWorld.x) * blendX;
+            SmoothedWorld.y += (targetWorld.y - SmoothedWorld.y) * blendY;
+            SmoothedWorld.z += (targetWorld.z - SmoothedWorld.z) * blendZ;
+
+            sdk::vector3 Delta = SmoothedWorld - CamPos;
+            if (Delta.magnitude() < 0.01f)
+                return;
+
+            sdk::matrix3 TargetMatrix = lookat(CamPos, SmoothedWorld);
             sdk::matrix3 CurrentMatrix = Cam.rotation();
-            sdk::matrix3 FinalMatrix = lerpmatrix3(CurrentMatrix, TargetMatrix, 1.f - SmoothFactor);
-
+            const float rotBlend = camerablend();
+            sdk::matrix3 FinalMatrix = lerpmatrix3(CurrentMatrix, TargetMatrix, rotBlend);
             Cam.rotation(FinalMatrix);
         }
         else {
-            POINT CursorPos;
+            POINT CursorPos{};
             HWND RobloxWindow = FindWindowA(0, "Roblox");
             if (!RobloxWindow || !GetCursorPos(&CursorPos) || !ScreenToClient(RobloxWindow, &CursorPos))
                 return;
 
-            float Sensitivity = global::aim::mouse::Mouse_Sensitivty;
-            if (global::aim::mouse::Smoothing_X > 0) {
-                float SmoothVal = global::aim::mouse::Smoothing_X;
-                if (SmoothVal < 1.f) SmoothVal = 1.f;
-                if (SmoothVal > 100.f) SmoothVal = 100.f;
-                Sensitivity /= SmoothVal;
+            sdk::vector2 targetScreen = AimPositionS;
+
+            if (!HasSmoothedAim) {
+                SmoothedScreen = { (float)CursorPos.x, (float)CursorPos.y };
+                HasSmoothedAim = true;
             }
 
-            float MoveX = (AimPositionS.x - CursorPos.x) * Sensitivity;
-            float MoveY = (AimPositionS.y - CursorPos.y) * Sensitivity;
+            const float blendX = smoothstep(1.f / (1.f + std::max(0.f, global::aim::mouse::Smoothing_X) * 0.85f));
+            const float blendY = smoothstep(1.f / (1.f + std::max(0.f, global::aim::mouse::Smoothing_Y) * 0.85f));
+
+            SmoothedScreen.x += (targetScreen.x - SmoothedScreen.x) * blendX;
+            SmoothedScreen.y += (targetScreen.y - SmoothedScreen.y) * blendY;
+
+            float sens = global::aim::mouse::Mouse_Sensitivty;
+            if (sens <= 0.f)
+                sens = 1.f;
+
+            float MoveX = (SmoothedScreen.x - (float)CursorPos.x) * sens;
+            float MoveY = (SmoothedScreen.y - (float)CursorPos.y) * sens;
 
             if (global::aim::Shake) {
                 MoveX += ((float)rand() / RAND_MAX * 2 - 1) * global::aim::ShakeX;
                 MoveY += ((float)rand() / RAND_MAX * 2 - 1) * global::aim::ShakeY;
             }
 
-            if (MoveX < -100.f) MoveX = -100.f;
-            if (MoveX > 100.f) MoveX = 100.f;
-            if (MoveY < -100.f) MoveY = -100.f;
-            if (MoveY > 100.f) MoveY = 100.f;
+            MoveX = clampf(MoveX, -100.f, 100.f);
+            MoveY = clampf(MoveY, -100.f, 100.f);
 
-            if (abs(MoveX) >= 1.f || abs(MoveY) >= 1.f) {
+            if (fabsf(MoveX) >= 1.f || fabsf(MoveY) >= 1.f) {
                 INPUT Input = {};
                 Input.type = INPUT_MOUSE;
                 Input.mi.dx = (LONG)MoveX;
@@ -530,10 +703,7 @@ namespace aim {
                             WorkedThisTick = true;
                         }
                         else {
-                            CurrentLockedName = "";
-                            IsPersisting = false;
-                            PersistenceName = "";
-                            global::aim::AimTarget = sdk::instance(0);
+                            resetaimstate();
                         }
                     }
                     else {
@@ -544,10 +714,7 @@ namespace aim {
                             WorkedThisTick = true;
                         }
                         else {
-                            CurrentLockedName = "";
-                            IsPersisting = false;
-                            PersistenceName = "";
-                            global::aim::AimTarget = sdk::instance(0);
+                            resetaimstate();
                         }
                     }
 

@@ -22,7 +22,7 @@
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{a2ea39bc-cbf5-432b-858e-8fc43d687c54}</ProjectGuid>
-    <RootNamespace>autopsy</RootNamespace>
+    <RootNamespace>Helios</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -76,7 +76,7 @@
     <IntDir>../Build/Extra/</IntDir>
     <IncludePath>Dependencies\FreeType\include;src;Dependencies</IncludePath>
     <LibraryPath>Dependencies\FreeType;C:\Program Files %28x86%29\Microsoft DirectX SDK %28June 2010%29\Lib\x64;$(LibraryPath)</LibraryPath>
-    <TargetName>gs-autopsy</TargetName>
+    <TargetName>helios</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>

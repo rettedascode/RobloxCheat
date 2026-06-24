@@ -40,17 +40,16 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "Comments", "Free Windows Roblox utility. Official website: https://autopsy.lol"
-            VALUE "CompanyName", "autopsy.lol"
-            VALUE "FileDescription", "Gamesense Beta"
+            VALUE "Comments", "Helios Roblox external utility."
+            VALUE "CompanyName", "Helios"
+            VALUE "FileDescription", "Helios"
             VALUE "FileVersion", "1.0.0.0"
-            VALUE "InternalName", "autopsy"
-            VALUE "LegalCopyright", "Copyright (C) autopsy.lol. All rights reserved."
-            VALUE "LegalTrademarks", "autopsy.lol"
-            VALUE "OriginalFilename", "gs-autopsy.exe"
-            VALUE "ProductName", "Gamesense Beta"
+            VALUE "InternalName", "helios"
+            VALUE "LegalCopyright", "Copyright (C) Helios. All rights reserved."
+            VALUE "LegalTrademarks", "Helios"
+            VALUE "OriginalFilename", "helios.exe"
+            VALUE "ProductName", "Helios"
             VALUE "ProductVersion", "1.0.0.0"
-            VALUE "Website", "https://autopsy.lol"
         END
     END
     BLOCK "VarFileInfo"

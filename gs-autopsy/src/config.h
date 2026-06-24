@@ -142,6 +142,123 @@ namespace config
         return file.good();
     }
 
+    inline void setcol(float col[4], float r, float g, float b, float a = 1.f)
+    {
+        col[0] = r;
+        col[1] = g;
+        col[2] = b;
+        col[3] = a;
+    }
+
+    inline void apply_legit()
+    {
+        global::setting::Team_Check = true;
+        global::setting::Client_Check = true;
+        global::setting::Streamproof = false;
+        global::setting::Performance_Mode = 1;
+        global::setting::Compact_UI = false;
+
+        global::overlay::watermark = true;
+        global::overlay::hotkey = true;
+        global::overlay::Hotkey_Aimbot = true;
+        global::overlay::Hotkey_Silent = false;
+        global::overlay::Hotkey_Fly = false;
+        global::overlay::Hotkey_BladeBallSpam = false;
+        global::overlay::Hotkey_Walkspeed = false;
+        global::overlay::Hotkey_HitboxExpander = false;
+        global::overlay::DamageLogs = false;
+        global::overlay::radar = false;
+        global::overlay::AimWarning = false;
+
+        global::ball::BallEsp = false;
+        global::ball::AutoParry = false;
+        global::ball::SpamParry = false;
+
+        global::world::Skybox = false;
+        global::world::Rotate = false;
+        global::world::Ambience = false;
+        global::world::Fog = false;
+        global::world::Brightness = false;
+        global::world::Exposure = false;
+        global::world::FOV = false;
+
+        global::aim::Enabled = true;
+        global::aim::useFov = true;
+        global::aim::DrawFov = false;
+        global::aim::FovSpin = false;
+        global::aim::FillFov = false;
+        global::aim::AimbotSticky = true;
+        global::aim::Shake = false;
+        global::aim::KnockedCheck = true;
+        global::aim::Prediction = true;
+        global::aim::AutoPrediction = true;
+        global::aim::VisibleCheck = true;
+        global::aim::TriggerBot = false;
+        global::aim::FovSize = 95.f;
+        global::aim::HitPart = 0;
+        global::aim::Aimbot_type = 0;
+        global::aim::TargetPriority = 0;
+        global::aim::HitChance = 100;
+        global::aim::TriggerDelayMs = 120;
+        global::aim::TriggerRadius = 4.f;
+        global::aim::Aimbot_Key = ImGuiKey_MouseX2;
+        global::aim::Aimbot_Mode = ImKeyBindMode_Hold;
+        global::aim::camera::Smoothing_X = 8.f;
+        global::aim::camera::Smoothing_Y = 8.f;
+        global::aim::mouse::Smoothing_X = 7.f;
+        global::aim::mouse::Smoothing_Y = 7.f;
+        global::aim::mouse::Mouse_Sensitivty = 0.9f;
+        setcol(global::aim::FovColor, 0.639f, 0.831f, 0.122f, 0.35f);
+
+        global::silent::Enabled = false;
+        global::silent::DrawFov = false;
+        global::silent::StickyAim = false;
+        global::silent::UseFov = false;
+        global::silent::KnockedCheck = true;
+        global::silent::VisibleCheck = true;
+        global::silent::Prediction = false;
+        global::silent::AutoPrediction = true;
+        global::silent::FovSpin = false;
+        global::silent::FillFov = false;
+
+        global::esp::Enabled = true;
+        global::esp::Box = true;
+        global::esp::Box_Fill = false;
+        global::esp::Box_Fill_Gradient = false;
+        global::esp::Box_Fill_Gradient_Rotate = false;
+        global::esp::Healthbar = true;
+        global::esp::Health = true;
+        global::esp::name = true;
+        global::esp::Distance = true;
+        global::esp::Rig_Type = false;
+        global::esp::tool = false;
+        global::esp::Skeleton = false;
+        global::esp::Chams = false;
+        global::esp::ChamsFade = false;
+        global::esp::Trails = false;
+        global::esp::Chinese_Hat = false;
+        global::esp::aimline = false;
+        global::esp::VisibleCheck = true;
+        global::esp::Render_Distance = 420.f;
+        global::esp::Healthbar_Type = 1;
+        global::esp::Box_Type = 1;
+        global::esp::Box_Fill_Type = 0;
+        global::esp::Name_Type = 1;
+        global::esp::gap = 2;
+        global::esp::Thickness = 1;
+        setcol(global::esp::color::Box, 0.92f, 0.92f, 0.92f, 0.88f);
+        setcol(global::esp::color::name, 0.95f, 0.95f, 0.95f, 1.f);
+        setcol(global::esp::color::Distance, 0.78f, 0.78f, 0.78f, 1.f);
+        setcol(global::esp::color::Healthbar, 0.35f, 0.85f, 0.45f, 1.f);
+        setcol(global::esp::color::Health, 0.95f, 0.95f, 0.95f, 1.f);
+        setcol(global::esp::color::Visible, 0.92f, 0.92f, 0.92f, 1.f);
+        setcol(global::esp::color::NotVisible, 0.95f, 0.45f, 0.45f, 1.f);
+
+        global::misc::fly = false;
+        global::misc::walkspeed = false;
+        global::misc::hitbox = false;
+    }
+
 
     static void writes(const char* sec, const char* key, const std::string& val, const char* path)
     {
@@ -596,5 +713,14 @@ namespace config
         global::misc::Hitbox_Size_X = readf("Misc", "Hitbox_Size_X", global::misc::Hitbox_Size_X, path);
         global::misc::Hitbox_Size_Y = readf("Misc", "Hitbox_Size_Y", global::misc::Hitbox_Size_Y, path);
         global::misc::Hitbox_Size_Z = readf("Misc", "Hitbox_Size_Z", global::misc::Hitbox_Size_Z, path);
+    }
+
+    inline void ensure_preset_legit()
+    {
+        if (!fs::exists(path("legit")))
+        {
+            apply_legit();
+            save("legit");
+        }
     }
 }

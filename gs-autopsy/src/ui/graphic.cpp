@@ -67,14 +67,14 @@ bool graphic::window()
 {
     Detail->WindowClass.cbSize = sizeof(Detail->WindowClass);
     Detail->WindowClass.style = CS_CLASSDC;
-    Detail->WindowClass.lpszClassName = "gs-remake by autopsy.lol";
+    Detail->WindowClass.lpszClassName = "Helios";
     Detail->WindowClass.hInstance = GetModuleHandleA(0);
     Detail->WindowClass.lpfnWndProc = wndproc;
     RegisterClassExA(&Detail->WindowClass);
 
     Detail->Window = CreateWindowExA(
         WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_TOOLWINDOW,
-        Detail->WindowClass.lpszClassName, "gs-remake by autopsy.lol", WS_POPUP,
+        Detail->WindowClass.lpszClassName, "Helios", WS_POPUP,
         0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
         0, 0, Detail->WindowClass.hInstance, 0);
 
@@ -1683,7 +1683,7 @@ namespace hud
         GetLocalTime(&st);
 
         char info[160]{};
-        std::snprintf(info, sizeof(info), "%s   autopsy   64tick   %02u:%02u",
+        std::snprintf(info, sizeof(info), "%s   helios   64tick   %02u:%02u",
             pcuser(), (unsigned)st.wHour, (unsigned)st.wMinute);
         char perf[48]{};
         const float framerate = ImMax(1.f, ImGui::GetIO().Framerate);
@@ -2031,17 +2031,17 @@ namespace hud
             aimwarning(ImGui::GetBackgroundDrawList());
 
         if (global::overlay::watermark)
-            panel("##autopsy_watermark", global::overlay::Watermark_Pos, ImVec2(200.f, 40.f), movable, watermark);
+            panel("##helios_watermark", global::overlay::Watermark_Pos, ImVec2(200.f, 40.f), movable, watermark);
         if (global::overlay::hotkey)
         {
             const int rows = hotkeycount();
-            panel("##autopsy_hotkeys", global::overlay::Hotkeys_Pos,
+            panel("##helios_hotkeys", global::overlay::Hotkeys_Pos,
                 ImVec2(142.f, 32.f + ImMax(1, rows) * 14.f), movable, hotkey);
         }
         if (global::overlay::radar)
         {
             const float radarSize = ImClamp(global::overlay::Radar_Size, 130.f, 280.f);
-            panel("##autopsy_radar", global::overlay::Radar_Pos, ImVec2(radarSize, radarSize), movable, radar);
+            panel("##helios_radar", global::overlay::Radar_Pos, ImVec2(radarSize, radarSize), movable, radar);
         }
     }
 }
@@ -2165,7 +2165,7 @@ static void welcome(bool menuOpen)
 
     ImFont* logo = LogoFont ? LogoFont : (TitleFont ? TitleFont : ImGui::GetFont());
     const float logoSize = logo->LegacySize * 1.65f;
-    const char* title = "AUTOPSY";
+    const char* title = "HELIOS";
     const ImVec2 titleSize = logo->CalcTextSizeA(logoSize, FLT_MAX, 0.f, title);
     const ImVec2 titlePos(center.x - titleSize.x * .5f, center.y - 34.f);
 
@@ -2245,7 +2245,7 @@ void graphic::menu()
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, MenuAlpha);
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::ColorConvertU32ToFloat4(color::Win));
 
-    const bool open = ImGui::Begin("##autopsy.lol", nullptr,
+    const bool open = ImGui::Begin("##helios", nullptr,
         ImGuiWindowFlags_NoDecoration |
         ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoBackground);
@@ -2607,7 +2607,7 @@ void graphic::menu()
             ui::toggle("Skybox Changer", &global::world::Skybox);
             if (global::world::Skybox) {
                 ui::combo("Preset", &global::world::Skybox_Type, {
-                    "Autopsy","Space","Pink Sky","Minecraft","Night Cloudy",
+                    "Helios","Space","Pink Sky","Minecraft","Night Cloudy",
                     "Sparkling Night","Winterness","Dark Crimson","Nebula","Tropical","Green Sky" });
                 ui::toggle("Rotation", &global::world::Rotate);
                 if (global::world::Rotate)
@@ -2908,6 +2908,18 @@ void graphic::menu()
             ImGui::InputText("##cn", cfgName, sizeof(cfgName));
             ImGui::PopStyleVar(2);
             ImGui::PopStyleColor(5);
+
+            ui::gap(4.f);
+
+            ui::labelsection("PRESETS");
+            if (ui::button("Load Legit", color::AccentDim, color::Accent, color::AccentFg, ImGui::GetContentRegionAvail().x))
+            {
+                config::apply_legit();
+                strcpy_s(cfgName, sizeof(cfgName), "legit");
+                config::save("legit");
+                config::refresh(cfgList);
+                notify::push(notify::kind::success, "Legit preset loaded", "legit");
+            }
 
             ui::gap(4.f);
 
