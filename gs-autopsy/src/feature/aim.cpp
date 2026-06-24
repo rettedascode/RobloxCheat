@@ -82,33 +82,84 @@ namespace aim {
             global::aim::AimTarget = sdk::instance(0);
         }
 
-        static int resolvehitbox(int requested, int boneCount)
+        static sdk::instance resolvehitboxpart(const sdk::player& player, int hitPart)
         {
-            if (boneCount <= 0)
-                return 0;
+            if (hitPart == 0)
+                return player.Head;
 
-            if (requested >= boneCount)
-                requested = 0;
+            if (hitPart == 1)
+            {
+                if (player.UpperTorso.Address)
+                    return player.UpperTorso;
+                return player.Torso;
+            }
 
-            if (requested == 4)
-                return rand() % boneCount;
+            if (hitPart == 2)
+            {
+                if (player.LowerTorso.Address)
+                    return player.LowerTorso;
+                if (player.HumanoidRootPart.Address)
+                    return player.HumanoidRootPart;
+                return player.Torso;
+            }
 
-            return requested;
+            if (player.Head.Address)
+                return player.Head;
+            if (player.UpperTorso.Address)
+                return player.UpperTorso;
+            if (player.Torso.Address)
+                return player.Torso;
+            if (player.LowerTorso.Address)
+                return player.LowerTorso;
+            return player.HumanoidRootPart;
         }
 
-        static void collectbones(const sdk::player& player, std::vector<std::pair<sdk::vector3, sdk::instance>>& bones)
+        static bool readbone(
+            const sdk::player& player,
+            int hitPart,
+            const sdk::vector3& cameraOrigin,
+            sdk::vector3& outPos,
+            sdk::instance& outPart)
         {
-            bones.clear();
-            if (player.Head.Address)
-                bones.push_back({ sdk::part(player.Head.Address).partposition(), player.Head });
-            if (player.Torso.Address)
-                bones.push_back({ sdk::part(player.Torso.Address).partposition(), player.Torso });
-            if (player.UpperTorso.Address)
-                bones.push_back({ sdk::part(player.UpperTorso.Address).partposition(), player.UpperTorso });
-            if (player.LowerTorso.Address)
-                bones.push_back({ sdk::part(player.LowerTorso.Address).partposition(), player.LowerTorso });
-            else if (player.HumanoidRootPart.Address)
-                bones.push_back({ sdk::part(player.HumanoidRootPart.Address).partposition(), player.HumanoidRootPart });
+            outPart = resolvehitboxpart(player, hitPart);
+            if (!outPart.Address)
+                return false;
+
+            sdk::part part(outPart.Address);
+            sdk::part primitive = part.primitive();
+            if (!primitive.Address)
+                return false;
+
+            outPos = primitive.position();
+            if (std::isnan(outPos.x) || std::isnan(outPos.y) || std::isnan(outPos.z))
+                return false;
+
+            const float dist3d = (cameraOrigin - outPos).magnitude();
+            outPos = prediction(outPart, outPos, dist3d);
+            return !std::isnan(outPos.x);
+        }
+
+        static bool refreshlockedaim(const sdk::vector3& cameraOrigin)
+        {
+            if (!LockedCharacter || !global::render.Address)
+                return false;
+
+            for (const auto& player : cache::snapshot())
+            {
+                if (player.character.Address != LockedCharacter)
+                    continue;
+
+                sdk::vector3 bonePos{};
+                sdk::instance bonePart{};
+                if (!readbone(player, LockedHitboxIdx, cameraOrigin, bonePos, bonePart))
+                    return false;
+
+                AimPositionW = bonePos;
+                AimPositionS = global::render.screen(bonePos);
+                return AimPositionS.x > -0.5f && AimPositionS.y > -0.5f;
+            }
+
+            return false;
         }
 
         static bool validtarget(
@@ -130,26 +181,17 @@ namespace aim {
             if (global::aim::KnockedCheck && knocked(Plr))
                 return false;
 
-            std::vector<std::pair<sdk::vector3, sdk::instance>> Bones;
-            collectbones(Plr, Bones);
-            if (Bones.empty())
+            sdk::instance bonePart{};
+            sdk::vector3 bonePos{};
+            if (!readbone(Plr, hitboxIdx, CameraOrigin, bonePos, bonePart))
                 return false;
 
-            if (hitboxIdx >= (int)Bones.size())
-                hitboxIdx = 0;
-
-            sdk::vector3 BonePos = Bones[hitboxIdx].first;
-            if (std::isnan(BonePos.x))
-                return false;
-
-            const float Dist3D = (CameraOrigin - BonePos).magnitude();
-            if (Dist3D > 700.f)
-                return false;
-
-            BonePos = prediction(Bones[hitboxIdx].second, BonePos, Dist3D);
-
-            const sdk::vector2 ScreenPos = global::render.screen(BonePos);
+            const sdk::vector2 ScreenPos = global::render.screen(bonePos);
             if (ScreenPos.x <= -0.5f || ScreenPos.y <= -0.5f)
+                return false;
+
+            const float Dist3D = (CameraOrigin - bonePos).magnitude();
+            if (Dist3D > 700.f)
                 return false;
 
             RECT ClientRect{};
@@ -157,7 +199,7 @@ namespace aim {
             if (ScreenPos.x > ClientRect.right || ScreenPos.y > ClientRect.bottom)
                 return false;
 
-            if (global::aim::VisibleCheck && !visible(Cam, BonePos, ScreenPos))
+            if (global::aim::VisibleCheck && !visible(Cam, bonePos, ScreenPos))
                 return false;
 
             const float Dist2D = sqrtf(
@@ -167,7 +209,7 @@ namespace aim {
             if (global::aim::useFov && Dist2D > global::aim::FovSize)
                 return false;
 
-            outBonePos = BonePos;
+            outBonePos = bonePos;
             outScreenPos = ScreenPos;
             outScore = global::aim::TargetPriority == 1 ? Dist3D : Dist2D;
             return true;
@@ -221,14 +263,21 @@ namespace aim {
     }
 
     static sdk::matrix3 lookat(const sdk::vector3& CamPos, const sdk::vector3& TargetPos) {
-        sdk::vector3 Forward = (TargetPos - CamPos).normalize();
-        sdk::vector3 Right = cross(Forward, { 0.f, 1.f, 0.f }).normalize();
-        sdk::vector3 Up = cross(Right, Forward);
+        sdk::vector3 Forward = (TargetPos - CamPos);
+        if (Forward.magnitude() < 0.0001f)
+            return {};
+
+        Forward = Forward.normalize();
+        sdk::vector3 Right = cross({ 0.f, 1.f, 0.f }, Forward);
+        if (Right.magnitude() < 0.0001f)
+            return {};
+        Right = Right.normalize();
+        sdk::vector3 Up = cross(Forward, Right);
 
         sdk::matrix3 M;
-        M.data[0] = Right.x;     M.data[1] = Up.x;    M.data[2] = -Forward.x;
-        M.data[3] = Right.y;     M.data[4] = Up.y;    M.data[5] = -Forward.y;
-        M.data[6] = Right.z;     M.data[7] = Up.z;    M.data[8] = -Forward.z;
+        M.data[0] = -Right.x;  M.data[1] = Up.x;     M.data[2] = -Forward.x;
+        M.data[3] = Right.y;   M.data[4] = Up.y;     M.data[5] = -Forward.y;
+        M.data[6] = -Right.z;  M.data[7] = Up.z;     M.data[8] = -Forward.z;
         return M;
     }
 
@@ -475,9 +524,7 @@ namespace aim {
             sdk::vector2 screenPos{};
             float score = 0.f;
 
-            std::vector<std::pair<sdk::vector3, sdk::instance>> bones;
-            collectbones(Plr, bones);
-            const int resolvedHitbox = resolvehitbox(global::aim::HitPart, (int)bones.size());
+            const int resolvedHitbox = std::clamp(global::aim::HitPart, 0, 2);
             if (!validtarget(Plr, Cam, CameraOrigin, CursorPos, RobloxWindow, resolvedHitbox, bonePos, screenPos, score))
                 continue;
 
@@ -588,17 +635,20 @@ namespace aim {
         if (!hitchance())
             return;
 
+        sdk::instance CameraInst = global::camera.Address
+            ? sdk::instance(global::camera.Address)
+            : sdk::model(global::model.Address).childclass("Workspace").childclass("Camera");
+        if (!CameraInst.Address)
+            return;
+
+        sdk::camera Cam(CameraInst.Address);
+        const sdk::vector3 CamPos = Cam.position();
+        if (!refreshlockedaim(CamPos))
+            return;
+
         sdk::vector3 targetWorld = AimPositionW;
 
         if (global::aim::Aimbot_type == 1) {
-            sdk::model Dm(global::model.Address);
-            sdk::instance WorkspaceInst = Dm.childclass("Workspace");
-            sdk::instance CameraInst = WorkspaceInst.child("Camera");
-            if (!CameraInst.Address)
-                return;
-
-            sdk::camera Cam(CameraInst.Address);
-            const sdk::vector3 CamPos = Cam.position();
 
             if (global::aim::Shake) {
                 targetWorld.x += ((float)rand() / RAND_MAX * 2 - 1) * global::aim::ShakeX;
@@ -642,35 +692,28 @@ namespace aim {
                 HasSmoothedAim = true;
             }
 
-            const float blendX = smoothstep(1.f / (1.f + std::max(0.f, global::aim::mouse::Smoothing_X) * 0.85f));
-            const float blendY = smoothstep(1.f / (1.f + std::max(0.f, global::aim::mouse::Smoothing_Y) * 0.85f));
+            float blendX = smoothstep(1.f / (1.f + std::max(0.f, global::aim::mouse::Smoothing_X) * 0.85f));
+            float blendY = smoothstep(1.f / (1.f + std::max(0.f, global::aim::mouse::Smoothing_Y) * 0.85f));
+            float sens = global::aim::mouse::Mouse_Sensitivty;
+            if (sens <= 0.f)
+                sens = 1.f;
+            blendX = clampf(blendX * sens, 0.04f, 1.f);
+            blendY = clampf(blendY * sens, 0.04f, 1.f);
 
             SmoothedScreen.x += (targetScreen.x - SmoothedScreen.x) * blendX;
             SmoothedScreen.y += (targetScreen.y - SmoothedScreen.y) * blendY;
 
-            float sens = global::aim::mouse::Mouse_Sensitivty;
-            if (sens <= 0.f)
-                sens = 1.f;
-
-            float MoveX = (SmoothedScreen.x - (float)CursorPos.x) * sens;
-            float MoveY = (SmoothedScreen.y - (float)CursorPos.y) * sens;
-
             if (global::aim::Shake) {
-                MoveX += ((float)rand() / RAND_MAX * 2 - 1) * global::aim::ShakeX;
-                MoveY += ((float)rand() / RAND_MAX * 2 - 1) * global::aim::ShakeY;
+                SmoothedScreen.x += ((float)rand() / RAND_MAX * 2 - 1) * global::aim::ShakeX;
+                SmoothedScreen.y += ((float)rand() / RAND_MAX * 2 - 1) * global::aim::ShakeY;
             }
 
-            MoveX = clampf(MoveX, -100.f, 100.f);
-            MoveY = clampf(MoveY, -100.f, 100.f);
-
-            if (fabsf(MoveX) >= 1.f || fabsf(MoveY) >= 1.f) {
-                INPUT Input = {};
-                Input.type = INPUT_MOUSE;
-                Input.mi.dx = (LONG)MoveX;
-                Input.mi.dy = (LONG)MoveY;
-                Input.mi.dwFlags = MOUSEEVENTF_MOVE;
-                SendInput(1, &Input, sizeof(INPUT));
-            }
+            POINT targetPt{
+                (LONG)std::lround(SmoothedScreen.x),
+                (LONG)std::lround(SmoothedScreen.y)
+            };
+            ClientToScreen(RobloxWindow, &targetPt);
+            SetCursorPos(targetPt.x, targetPt.y);
         }
     }
 
